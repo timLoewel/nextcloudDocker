@@ -11,5 +11,6 @@ VOLUME /mnt/nextcloudFiles
 USER www-data:www-data
 COPY dockerScripts/*.sh /usr/local/bin/
 
+# use our own entrypoint, not the one from nextcloud as it fixes a bug in kubernetes https://github.com/nextcloud/docker/issues/489
 ENTRYPOINT ["/usr/local/bin/beforeNextcloudEntrypoint.sh"]
 CMD ["apache2-foreground"]
