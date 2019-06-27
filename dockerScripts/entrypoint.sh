@@ -4,6 +4,7 @@
 
 set -eu
 
+
 # version_greater A B returns whether A > B
 version_greater() {
     [ "$(printf '%s\n' "$@" | sort -t '.' -n -k1,1 -k2,2 -k3,3 -k4,4 | head -n 1)" != "$1" ]
@@ -11,7 +12,7 @@ version_greater() {
 
 # version_equal A B returns whether A = B
 version_equal() {
-    [ "$(printf '%s\n' "$@" | sort -t '.' -n -k1,1 -k2,2 -k3,3 -k4,4 | head -n 1)" = "$1" ]
+    [ "$1" = "$2" ] 
 }
 
 # return true if specified directory is empty
@@ -27,7 +28,7 @@ run_as() {
     fi
 }
 
-# TODO: use NEXTCLOUD_CONFIG_DIR to check for version, skip database initialization if exists
+NEXTCLOUD_CONFIG_DIR="$NEXTCLOUD_CONFIG_DIR"||"/var/www/html/config/config.php"
 
 if expr "$1" : "apache" 1>/dev/null || [ "$1" = "php-fpm" ] || [ "${NEXTCLOUD_UPDATE:-0}" -eq 1 ]; then
     if [ -n "${REDIS_HOST+x}" ]; then
@@ -39,14 +40,21 @@ if expr "$1" : "apache" 1>/dev/null || [ "$1" = "php-fpm" ] || [ "${NEXTCLOUD_UP
         } > /usr/local/etc/php/conf.d/redis-session.ini
     fi
 
-    installed_version="0.0.0.0"
-    if [ -f /var/www/html/config/config.php ]; then
+    installed_version="0.0.0.0"    
+    if [ -f $NEXTCLOUD_CONFIG_DIR/config.php ]; then
+            # shellcheck disable=SC2016
+            installed_version=$(CONFIG_DIR="$NEXTCLOUD_CONFIG_DIR" php -r 'require getenv("CONFIG_DIR") . "/config.php"; echo $CONFIG["version"];')
+    elif [ -f /var/www/html/version.php ]; then
         # shellcheck disable=SC2016
-        installed_version="$(awk '$1 ~ /version/ { print $3 }' /var/www/html/config/config.php | grep -oP "(?<=').*(?=')")"
-    fi
-    echo "installed nextcloud version: $installed_version"
+        installed_version="$(php -r 'require "/var/www/html/version.php"; echo implode(".", $OC_Version);')"
+    fi    
+    echo "last installed nextcloud version: $installed_version"
 
+    filesAlreadyInstalled=false
     
+    if [ -f /var/www/html/index.php ]; then
+        filesAlreadyInstalled=true
+    fi
 
     # shellcheck disable=SC2016
     image_version="$(php -r 'require "/usr/src/nextcloud/version.php"; echo implode(".", $OC_Version);')"
@@ -59,13 +67,19 @@ if expr "$1" : "apache" 1>/dev/null || [ "$1" = "php-fpm" ] || [ "${NEXTCLOUD_UP
     fi
 
     if version_equal "$installed_version" "$image_version"; then
-	echo "same version found: $installed_version => $image_version"
+    	echo "same version found: $installed_version => $image_version"
         if [ "$(id -u)" = 0 ]; then
             rsync_options="-rlDog --chown www-data:root"
         else
             rsync_options="-rlD"
         fi
-        rsync $rsync_options --delete --exclude-from=/upgrade.exclude /usr/src/nextcloud/ /var/www/html/
+        
+        if $filesAlreadyInstalled; then
+            echo "files are already installed, excluding changed directories and files"
+            rsync_options="$rsync_options --exclude-from=/upgrade.exclude"
+        fi
+
+        rsync $rsync_options --delete /usr/src/nextcloud/ /var/www/html/
 
         for dir in config data custom_apps themes; do
             if [ ! -d "/var/www/html/$dir" ] || directory_empty "/var/www/html/$dir"; then
@@ -73,16 +87,14 @@ if expr "$1" : "apache" 1>/dev/null || [ "$1" = "php-fpm" ] || [ "${NEXTCLOUD_UP
             fi
         done
         echo "Initializing finished"
-    fi
-
-    if version_greater "$image_version" "$installed_version"; then
+    elif version_greater "$image_version" "$installed_version"; then
         echo "Initializing nextcloud $image_version ..."
         if [ "$installed_version" != "0.0.0.0" ]; then
             echo "Upgrading nextcloud from $installed_version ..."
             run_as 'php /var/www/html/occ app:list' | sed -n "/Enabled:/,/Disabled:/p" > /tmp/list_before
-	else 
-	    echo "installing for the first time"        
-    	fi
+	    else 
+	        echo "installing for the first time"    
+        fi
         if [ "$(id -u)" = 0 ]; then
             rsync_options="-rlDog --chown www-data:root"
         else
@@ -117,7 +129,7 @@ if expr "$1" : "apache" 1>/dev/null || [ "$1" = "php-fpm" ] || [ "${NEXTCLOUD_UP
                 fi
 
                 install=false
-                if [  -n "${SQLITE_DATABASE+x}" ]; then
+                if [ -n "${SQLITE_DATABASE+x}" ]; then
                     echo "Installing with SQLite database"
                     # shellcheck disable=SC2016
                     install_options=$install_options' --database-name "$SQLITE_DATABASE"'
