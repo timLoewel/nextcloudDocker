@@ -8,7 +8,7 @@ id
 which mysql
 
 mkdir -p /mnt/nextcloudFiles/data
-mkdir -p /mnt/nextcloudFiles/config
+mkdir -p /mnt/nextcloudFiles/data
 chmod 770 /mnt/nextcloudFiles/data
 
 # wait for mysql to be up
